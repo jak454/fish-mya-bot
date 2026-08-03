@@ -48,8 +48,11 @@ jobs:
         
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           
+          GAME_ACCESS_TOKEN: ${{ secrets.GAME_ACCESS_TOKEN }}
+          
         run: python bot.py
         
+
 
 
 
