@@ -46,8 +46,12 @@ login_handled = False
 play_handled = False
 
 # ==========================================
-# ERROR MONITORING
+# AUTO RESTART & MONITORING
 # ==========================================
+auto_restart_enabled = True
+last_restart_time = time.time()
+restart_count = 0
+restart_interval = 900  # 15 minutes = 900 seconds
 monitor_alive = False
 error_count = 0
 max_errors = 5  # Max errors before forced restart
@@ -100,6 +104,39 @@ def send_ws(ws, payload_dict):
             print(f"[SEND] Error: {e}")
     return False
 
+
+
+# ==========================================
+# AUTO RESTART SYSTEM
+# ==========================================
+def auto_restart_loop():
+    """15 min တစ်ခါ auto restart ပြီး top 1 ဝင်ဖို့ ခွင့်ပြု"""
+    global auto_restart_enabled, last_restart_time, restart_count, restart_interval
+    
+    print("[AUTO-RESTART] Monitor started - 15 min restart interval")
+    
+    while True:
+        try:
+            time.sleep(1)
+            
+            if auto_restart_enabled and (time.time() - last_restart_time) > restart_interval:
+                restart_count += 1
+                print(f"[AUTO-RESTART] #{restart_count} - Restarting after 15 min (Top 1 reset)")
+                
+                if config_data["owner_id"] and is_running:
+                    try:
+                        bot.send_message(
+                            config_data["owner_id"],
+                            f"🔄 *Auto Restart #{restart_count}*\n⏰ 15 min ရောက်ပြီ\n🏆 Top 1 ဝင်ဖို့ restart လုပ်နေပါပြီ...",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
+                
+                force_restart()
+                last_restart_time = time.time()
+                
+        except Exception as e:
+            print(f"[AUTO-RESTART] Error: {e}")
 
 
 def force_restart():
@@ -208,6 +245,7 @@ def get_main_menu_markup():
         InlineKeyboardButton("🛑 Stop Bot", callback_data="cmd_stop"),
         InlineKeyboardButton("🔑 Set/Update Token", callback_data="cmd_token"),
         InlineKeyboardButton("📊 Status", callback_data="cmd_status"),
+        InlineKeyboardButton(f"🔄 Auto Restart: {'ON' if auto_restart_enabled else 'OFF'}", callback_data="cmd_toggle_restart"),
         InlineKeyboardButton("🔧 Force Restart", callback_data="cmd_force_restart")
     )
     return markup
@@ -602,7 +640,7 @@ def handle_start_cmd(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    global is_running, config_data
+    global is_running, config_data, auto_restart_enabled
 
     user_id = call.message.chat.id
     if config_data["owner_id"] != user_id:
@@ -624,6 +662,8 @@ def handle_callback(call):
         in_game = False
         
         is_running = True
+        last_restart_time = time.time()
+        restart_count = 0
         threading.Thread(target=start_ws, daemon=True).start()
         bot.answer_callback_query(call.id, "⚡ Starting ULTRA SPEED...")
 
@@ -634,6 +674,12 @@ def handle_callback(call):
         stop_bot_internal()
         bot.answer_callback_query(call.id, "🛑 Stopping...")
         send_or_edit_message(user_id, "🔴 Bot Stopped.", get_main_menu_markup())
+
+    elif cmd == "cmd_toggle_restart":
+        auto_restart_enabled = not auto_restart_enabled
+        status = "ON (15min)" if auto_restart_enabled else "OFF"
+        bot.answer_callback_query(call.id, f"Auto Restart: {status}")
+        send_or_edit_message(user_id, f"🔄 Auto Restart: *{status}*", get_main_menu_markup())
 
     elif cmd == "cmd_force_restart":
         bot.answer_callback_query(call.id, "🔄 Restarting...")
@@ -647,12 +693,18 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
+        elapsed = int(time.time() - last_restart_time)
+        mins = elapsed // 60
+        next_restart = 15 - mins if mins < 15 else 0
         msg = (f"📊 *Bot Status (ULTRA)*\n\n"
                f"Status: {status}\n"
                f"Shooting: {shoot}\n"
                f"Speed: {shoot_interval}s/shot\n"
                f"Bullet Speed: {bullet_speed}\n"
                f"Targeting: {len(fish_list)} fish\n"
+               f"🔄 Auto Restart: {'ON' if auto_restart_enabled else 'OFF'}\n"
+               f"⏰ Next restart: {next_restart} min\n"
+               f"🔧 Restarts: {restart_count}\n"
                f"Server Time: {last_server_time}")
         send_or_edit_message(user_id, msg, get_main_menu_markup())
         bot.answer_callback_query(call.id)
@@ -685,11 +737,15 @@ if __name__ == "__main__":
     print("🤖 Fish Bot ULTRA SPEED - AUTO START")
     print(f"⚡ Shoot interval: {shoot_interval}s")
     print(f"🔫 Bullet speed: {bullet_speed}")
-
+    print(f"🔄 Auto restart: 15 min")
     print(f"🔧 Error auto fix: ON")
     print("=" * 50)
     
-        # Start health monitor (always running)
+    # Start auto restart monitor (always running)
+    threading.Thread(target=auto_restart_loop, daemon=True).start()
+    print("[MAIN] Auto restart monitor started.")
+    
+    # Start health monitor (always running)
     threading.Thread(target=monitor_health, daemon=True).start()
     print("[MAIN] Health monitor started.")
     
@@ -697,6 +753,7 @@ if __name__ == "__main__":
     if config_data.get("game_access_token"):
         print("[Auto] Token configured. Starting bot automatically...")
         is_running = True
+        last_restart_time = time.time()
         threading.Thread(target=start_ws, daemon=True).start()
         print("[Auto] Bot started. ULTRA SPEED MODE!")
     else:
