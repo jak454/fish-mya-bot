@@ -61,7 +61,7 @@ last_error_time = 0
 # OPTIMIZED GAME LOGIC VARIABLES - ULTRA SPEED
 # ==========================================
 fire_rate_scale = 1.0
-shoot_interval = 0.002  # ULTRA FAST: 2ms per shot
+shoot_interval = 0.001  # HYPER SPEED: 1ms per shot
 bullet_speed = 1400   # Constant bullet speed from analyzed logic
 fish_list = {}        # Store fish data for targeting
 fish_lock = threading.Lock()
@@ -141,7 +141,7 @@ def clean_and_send_menu(chat_id, text=None):
 
     # 2. Send new menu
     if not text:
-        text = "🤖 *Fish Bot ULTRA SPEED*\n⚡ Shoot: 0.002s\n🔫 Bullet Speed: 1400\n🔧 Error Fix: Auto\n\nSelect action:"
+        text = "🤖 *Fish Bot HYPER SPEED (2X)*\n⚡ Shoot: 0.001s\n🐟 Targets: 2 fish\n🔫 Bullet Speed: 1400\n\nSelect action:"
         
     try:
         msg = bot.send_message(chat_id, text, reply_markup=get_main_menu_markup(), parse_mode="Markdown")
@@ -268,7 +268,7 @@ def auto_shoot_loop(ws):
             with fish_lock:
                 current_fish_ids = list(fish_list.keys()) 
                 if current_fish_ids:
-                    target_ids = [current_fish_ids[0]]
+                    target_ids = current_fish_ids[:2]  # Double target: 2 fish at once
             
             angle_rad = math.radians(random.randint(-45, 45))
             
@@ -338,7 +338,7 @@ def start_game_actions(ws):
 
         if config_data["owner_id"]:
             auto_restart_status = 'ON' if config_data.get("auto_restart") else 'OFF'
-            clean_and_send_menu(config_data["owner_id"], f"🌊 *Entered Room*\n⚡ ULTRA SPEED: {shoot_interval}s/shot\n🔄 Auto Restart: {auto_restart_status}")
+            clean_and_send_menu(config_data["owner_id"], f"🌊 *Entered Room*\n⚡ HYPER SPEED: {shoot_interval}s/shot\n🐟 Targets: 2 fish\n🔄 Auto Restart: {auto_restart_status}")
     except Exception as e:
         print(f"[ACTION] Error: {e}")
 
@@ -462,146 +462,79 @@ def reconnect():
         ws_conn = None
 
     stop_all_threads()
-    time.sleep(2)
-    if is_running:
-        threading.Thread(target=start_ws, daemon=True).start()
 
 def start_ws():
-    global ws_conn
-    token = config_data.get("game_access_token")
-    if not token:
-        return
-
-    url = f"{WS_URL}?access_token={token}"
+    global ws_conn, is_running
+    is_running = True
     try:
-        conn = websocket.create_connection(
-            url,
-            header=WS_HEADERS,
-            sslopt={"cert_reqs": ssl.CERT_NONE},
-            timeout=60
-        )
-        with ws_lock:
-            ws_conn = conn
-
-        if config_data["owner_id"]:
-            clean_and_send_menu(config_data["owner_id"], "🟢 Connected. Logging in...")
-
-        time.sleep(0.3)
-        send_ws(conn, {
-            "route": "mytelLogin",
-            "data": {"accessToken": token, "language": "my"},
-            "msgId": 1
-        })
-        ws_recv_loop(conn)
-    except:
+        ws_conn = websocket.WebSocket(sslopt={"cert_reqs": ssl.CERT_NONE})
+        ws_conn.connect(WS_URL, header=WS_HEADERS)
+        
+        # Initial login
+        if config_data["game_access_token"]:
+            send_ws(ws_conn, {"route": "login", "data": {"accessToken": config_data["game_access_token"], "version": "1.0.0"}, "msgId": 1})
+        
+        ws_recv_loop(ws_conn)
+    except Exception as e:
+        print(f"[WS] Connection error: {e}")
         reconnect()
 
-def stop_bot_internal():
-    global is_running, ws_conn
-    is_running = False
-    stop_all_threads()
-    with ws_lock:
-        try:
-            if ws_conn:
-                ws_conn.close()
-        except:
-            pass
-        ws_conn = None
-
 # ==========================================
-# TELEGRAM COMMANDS
+# BOT HANDLERS
 # ==========================================
 @bot.message_handler(commands=['start'])
-def handle_start_cmd(message):
+def start(message):
     global config_data
-    user_id = message.chat.id
+    config_data["owner_id"] = message.chat.id
+    save_config()
+    clean_and_send_menu(message.chat.id, "👋 *Welcome to Fish Bot ULTRA*\n\nPlease set your game access token first.")
 
-    if config_data["owner_id"] is None:
-        config_data["owner_id"] = user_id
-        save_config()
-        bot.send_message(user_id, "👑 You are now the Owner!")
-    elif config_data["owner_id"] != user_id:
-        bot.send_message(user_id, "⛔ Not authorized.")
-        return
-
-    clean_and_send_menu(user_id)
-
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cmd_'))
 def handle_callback(call):
-    global is_running, config_data, login_handled, play_handled, in_game
-
-    user_id = call.message.chat.id
-    if config_data["owner_id"] != user_id:
-        bot.answer_callback_query(call.id, "⛔ Not authorized.")
-        return
-
-    cmd = call.data
-    if cmd == "cmd_start":
-        if is_running:
-            bot.answer_callback_query(call.id, "⚠️ Already running.")
+    global is_running, config_data
+    
+    if call.data == "cmd_start":
+        if not config_data["game_access_token"]:
+            bot.answer_callback_query(call.id, "⚠️ Please set token first!")
             return
-        if not config_data.get("game_access_token"):
-            bot.answer_callback_query(call.id, "❌ Set token first!")
-            return
-        login_handled = False
-        play_handled = False
-        in_game = False
         is_running = True
         threading.Thread(target=start_ws, daemon=True).start()
-        bot.answer_callback_query(call.id, "⚡ Starting...")
+        if not monitor_alive:
+            threading.Thread(target=monitor_health, daemon=True).start()
+        bot.answer_callback_query(call.id, "▶️ Bot Starting...")
+        
+    elif call.data == "cmd_stop":
+        is_running = False
+        reconnect()
+        bot.answer_callback_query(call.id, "🛑 Bot Stopped")
+        clean_and_send_menu(call.message.chat.id, "🛑 *Bot Stopped Successfully*")
+        
+    elif call.data == "cmd_token":
+        msg = bot.send_message(call.message.chat.id, "🔑 *Please send your Game URL or Access Token:*", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_token)
+        
+    elif call.data == "cmd_status":
+        status = "🟢 Running" if is_running else "🔴 Stopped"
+        ws_status = "✅ Connected" if ws_conn and ws_conn.connected else "❌ Disconnected"
+        targets = len(fish_list)
+        bot.answer_callback_query(call.id, f"Status: {status}")
+        track_and_send(call.message.chat.id, f"📊 *Bot Status*\n\nState: {status}\nWS: {ws_status}\n🐟 Active Fish: {targets}\n⚡ Speed: {shoot_interval}s\n🔄 Auto Restart: {config_data.get('auto_restart')}")
 
-    elif cmd == "cmd_stop":
-        if not is_running:
-            bot.answer_callback_query(call.id, "⚠️ Already stopped.")
-            return
-        stop_bot_internal()
-        bot.answer_callback_query(call.id, "🛑 Stopping...")
-        clean_and_send_menu(user_id, "🔴 Bot Stopped.")
-
-    elif cmd == "cmd_force_restart":
-        bot.answer_callback_query(call.id, "🔄 Restarting...")
+    elif call.data == "cmd_force_restart":
+        bot.answer_callback_query(call.id, "🔧 Force Restarting...")
         force_restart()
 
-    elif cmd == "cmd_token":
-        msg = bot.send_message(user_id, "🔑 *Send your Game URL or Access Token:*", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, handle_token_input)
-        bot.answer_callback_query(call.id)
-
-    elif cmd == "cmd_status":
-        status = "🟢 Running" if is_running else "🔴 Stopped"
-        shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        msg = (f"📊 *Bot Status (ULTRA)*\n\n"
-               f"Status: {status}\n"
-               f"Shooting: {shoot}\n"
-               f"Speed: {shoot_interval}s/shot\n"
-               f"Bullet Speed: {bullet_speed}\n"
-               f"Targeting: {len(fish_list)} fish\n"
-               f"Server Time: {last_server_time}")
-        clean_and_send_menu(user_id, msg)
-        bot.answer_callback_query(call.id)
-
-def handle_token_input(message):
+def process_token(message):
     global config_data
-    user_id = message.chat.id
-    raw = message.text.strip()
-    token = parse_game_url(raw)
-
-    if not token:
-        bot.send_message(user_id, "❌ Invalid. Try again.")
-        return
-
-    config_data["game_access_token"] = token
-    save_config()
-    try: bot.delete_message(user_id, message.message_id)
-    except: pass
-    clean_and_send_menu(user_id, "✅ Token updated!")
+    token = parse_game_url(message.text)
+    if token:
+        config_data["game_access_token"] = token
+        save_config()
+        bot.send_message(message.chat.id, "✅ *Token Updated!*\nYou can now Start the bot.", parse_mode="Markdown")
+        clean_and_send_menu(message.chat.id)
+    else:
+        bot.send_message(message.chat.id, "❌ *Invalid Token or URL!*\nPlease try again.", parse_mode="Markdown")
 
 if __name__ == "__main__":
-    threading.Thread(target=monitor_health, daemon=True).start()
-    if config_data.get("game_access_token"):
-        is_running = True
-        threading.Thread(target=start_ws, daemon=True).start()
-    try:
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    except:
-        pass
+    print("Bot is running...")
+    bot.polling(none_stop=True)
