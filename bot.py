@@ -9,6 +9,7 @@ import ssl
 import random
 import os
 import math
+import sys
 from urllib.parse import urlparse, parse_qs
 
 # ==========================================
@@ -30,7 +31,7 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 # ==========================================
 # STATE
 # ==========================================
-config_data = {"owner_id": None, "game_access_token": None}
+config_data = {"owner_id": None, "game_access_token": None, "auto_restart": True}
 is_running = False
 ws_conn = None
 ws_lock = threading.Lock()
@@ -43,6 +44,18 @@ use_4x_alive = False
 in_game = False
 login_handled = False
 play_handled = False
+
+# ==========================================
+# AUTO RESTART & MONITORING
+# ==========================================
+auto_restart_enabled = True
+last_restart_time = time.time()
+restart_count = 0
+restart_interval = 900  # 15 minutes = 900 seconds
+monitor_alive = False
+error_count = 0
+max_errors = 5  # Max errors before forced restart
+last_error_time = 0
 
 # ==========================================
 # OPTIMIZED GAME LOGIC VARIABLES - ULTRA SPEED
@@ -92,6 +105,138 @@ def send_ws(ws, payload_dict):
     return False
 
 # ==========================================
+# AUTO RESTART SYSTEM
+# ==========================================
+def auto_restart_loop():
+    """15 min တစ်ခါ auto restart ပြီး top 1 ဝင်ဖို့ ခွင့်ပြု"""
+    global auto_restart_enabled, last_restart_time, restart_count, restart_interval
+    
+    print("[AUTO-RESTART] Monitor started - 15 min restart interval")
+    
+    while True:
+        try:
+            # Sleep in small intervals to respond quickly
+            time.sleep(1)
+            
+            # Check if 15 minutes passed
+            if auto_restart_enabled and (time.time() - last_restart_time) > restart_interval:
+                restart_count += 1
+                print(f"[AUTO-RESTART] #{restart_count} - Restarting after 15 min (Top 1 reset)")
+                
+                if config_data["owner_id"] and is_running:
+                    try:
+                        bot.send_message(
+                            config_data["owner_id"],
+                            f"🔄 *Auto Restart #{restart_count}*\n⏰ 15 min ရောက်ပြီ\n🏆 Top 1 ဝင်ဖို့ restart လုပ်နေပါပြီ...",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
+                
+                # Force restart
+                force_restart()
+                
+                last_restart_time = time.time()
+                
+        except Exception as e:
+            print(f"[AUTO-RESTART] Error: {e}")
+
+def force_restart():
+    """Bot ကို fully restart လုပ်ခြင်း - အစအဆုံး"""
+    global is_running, ws_conn, login_handled, play_handled, in_game
+    
+    print("[RESTART] Force restart initiated...")
+    
+    # Stop everything
+    is_running = False
+    
+    with ws_lock:
+        try:
+            if ws_conn:
+                ws_conn.close()
+        except:
+            pass
+        ws_conn = None
+    
+    stop_all_threads()
+    time.sleep(1)  # Wait for threads to stop
+    
+    # Reset flags for fresh start
+    login_handled = False
+    play_handled = False
+    in_game = False
+    fish_list.clear()
+    
+    # Start fresh
+    is_running = True
+    print("[RESTART] Starting fresh connection...")
+    
+    if config_data["owner_id"]:
+        try:
+            bot.send_message(
+                config_data["owner_id"],
+                "✅ *Restart Complete*\n🟢 Connected\n⚡ Shooting again...",
+                parse_mode="Markdown"
+            )
+        except: pass
+    
+    threading.Thread(target=start_ws, daemon=True).start()
+
+def monitor_health():
+    """Error monitoring - error ဖြစ်ရင် auto restart"""
+    global error_count, max_errors, last_error_time, monitor_alive
+    
+    monitor_alive = True
+    print("[MONITOR] Health monitor started.")
+    
+    while monitor_alive:
+        time.sleep(5)  # Check every 5 seconds
+        
+        try:
+            # Check if shoot thread is dead while bot should be running
+            if is_running and not shoot_alive:
+                error_count += 1
+                last_error_time = time.time()
+                print(f"[MONITOR] Shoot thread died! Error count: {error_count}/{max_errors}")
+                
+                if error_count >= max_errors:
+                    print("[MONITOR] Too many errors! Force restart...")
+                    if config_data["owner_id"]:
+                        try:
+                            bot.send_message(
+                                config_data["owner_id"],
+                                f"🔧 *Auto Fix #{error_count}*\n⚠️ Error ပြဿနာသိတယ်\n🔄 Auto restart လုပ်ပေးနေပါပြီ...",
+                                parse_mode="Markdown"
+                            )
+                        except: pass
+                    error_count = 0
+                    force_restart()
+                else:
+                    print("[MONITOR] Restarting shoot thread...")
+                    # Try to restart just the shoot thread first
+                    if ws_conn and ws_conn.connected:
+                        threading.Thread(target=auto_shoot_loop, args=(ws_conn,), daemon=True).start()
+                        if config_data["owner_id"]:
+                            try:
+                                bot.send_message(
+                                    config_data["owner_id"],
+                                    f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Shoot thread ပြန်စပေးခဲ့တယ်",
+                                    parse_mode="Markdown"
+                                )
+                            except: pass
+            
+            # Check if heartbeat is dead while running
+            elif is_running and not heartbeat_alive:
+                error_count += 1
+                print(f"[MONITOR] Heartbeat thread died! Error count: {error_count}/{max_errors}")
+                
+                if ws_conn and ws_conn.connected:
+                    threading.Thread(target=heartbeat_loop, args=(ws_conn,), daemon=True).start()
+                    print("[MONITOR] Heartbeat restarted.")
+                    
+        except Exception as e:
+            print(f"[MONITOR] Error: {e}")
+
+# ==========================================
 # TELEGRAM UI
 # ==========================================
 def get_main_menu_markup():
@@ -100,7 +245,9 @@ def get_main_menu_markup():
         InlineKeyboardButton("▶️ Start Bot", callback_data="cmd_start"),
         InlineKeyboardButton("🛑 Stop Bot", callback_data="cmd_stop"),
         InlineKeyboardButton("🔑 Set/Update Token", callback_data="cmd_token"),
-        InlineKeyboardButton("📊 Status", callback_data="cmd_status")
+        InlineKeyboardButton("📊 Status", callback_data="cmd_status"),
+        InlineKeyboardButton(f"🔄 Auto Restart: {'ON' if auto_restart_enabled else 'OFF'}", callback_data="cmd_toggle_restart"),
+        InlineKeyboardButton("🔧 Force Restart", callback_data="cmd_force_restart")
     )
     return markup
 
@@ -131,11 +278,11 @@ def heartbeat_loop(ws):
     print("[HEARTBEAT] Thread started - ULTRA FAST mode.")
 
     while is_running and heartbeat_alive:
-        if time.time() - last_hb > 2:  # Faster heartbeat (was 3s)
+        if time.time() - last_hb > 2:
             if not send_ws(ws, {"route": "ping", "data": {}, "msgId": 0}):
                 break
             last_hb = time.time()
-        time.sleep(0.3)  # ULTRA: Reduced from 1 to 0.3 seconds
+        time.sleep(0.3)
 
     heartbeat_alive = False
     print("[HEARTBEAT] Thread stopped.")
@@ -146,22 +293,17 @@ def heartbeat_loop(ws):
 def auto_shoot_loop(ws):
     global shoot_alive, is_running, shoot_interval, fish_list, bullet_speed
     shoot_alive = True
-    print(f"[SHOOT] Thread started - ULTRA SPEED interval: {shoot_interval}s (bullet_speed: {bullet_speed})")
+    print(f"[SHOOT] Thread started - ULTRA SPEED interval: {shoot_interval}s")
 
     while is_running and shoot_alive:
         try:
-            # Target selection: pick the first fish if available, else shoot empty
             target_ids = []
             if fish_list:
                 fish_id = next(iter(fish_list))
                 target_ids = [fish_id]
             
-            # The correct route is 'shoot'
-            # Parameters: rad, type, target, rapidFire, auto, bulletSpeed
-            # ULTRA: Wider angle spread for more coverage
             angle_rad = math.radians(random.randint(-45, 45))
             
-            # Send shoot with bullet speed included
             send_ws(ws, {
                 "route": "shoot",
                 "data": {
@@ -170,12 +312,11 @@ def auto_shoot_loop(ws):
                     "target": target_ids[0] if target_ids else -1,
                     "rapidFire": True,
                     "auto": True,
-                    "bulletSpeed": bullet_speed  # ULTRA: Include bullet speed in payload
+                    "bulletSpeed": bullet_speed
                 },
                 "msgId": 0
             })
 
-            # Also send clientHitFish for the targets (every shot for maximum damage)
             if target_ids:
                 send_ws(ws, {
                     "route": "clientHitFish",
@@ -183,7 +324,7 @@ def auto_shoot_loop(ws):
                         "btype": 1,
                         "skillType": 0,
                         "fIds": target_ids,
-                        "bulletSpeed": bullet_speed  # ULTRA: Include bullet speed in hit
+                        "bulletSpeed": bullet_speed
                     },
                     "msgId": 0
                 })
@@ -191,7 +332,6 @@ def auto_shoot_loop(ws):
             print(f"[SHOOT] Error: {e}")
             break
         
-        # ULTRA FAST: Shoot interval
         time.sleep(shoot_interval)
 
     shoot_alive = False
@@ -215,35 +355,31 @@ def use_4x_loop(ws):
 # ==========================================
 def start_game_actions(ws):
     global in_game
-    time.sleep(0.15)  # ULTRA: Reduced from 1 to 0.15 seconds (6.7x faster room entry)
+    time.sleep(0.15)
     if not is_running:
         return
     try:
         in_game = True
 
-        # Send clientActiveGun - Setting up the gun with ULTRA speed
         send_ws(ws, {
             "route": "clientActiveGun",
             "data": {"btype": 1, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed},
             "msgId": 0
         })
 
-        # Start heartbeat
         if not heartbeat_alive:
             threading.Thread(target=heartbeat_loop, args=(ws,), daemon=True).start()
 
-        # Start shoot with the ULTRA speed logic
         if not shoot_alive:
             threading.Thread(target=auto_shoot_loop, args=(ws,), daemon=True).start()
 
-        # Start 4x item
         if not use_4x_alive:
             threading.Thread(target=use_4x_loop, args=(ws,), daemon=True).start()
 
         print(f"[ACTION] Game actions started with ULTRA Speed! Shoot interval: {shoot_interval}s")
 
         if config_data["owner_id"]:
-            send_or_edit_message(config_data["owner_id"], f"🌊 *Entered Room*\n⚡ ULTRA SPEED: {shoot_interval}s per shot\n🔫 Bullet Speed: {bullet_speed}", get_main_menu_markup())
+            send_or_edit_message(config_data["owner_id"], f"🌊 *Entered Room*\n⚡ ULTRA SPEED: {shoot_interval}s/shot\n🔄 Auto Restart: {'ON' if auto_restart_enabled else 'OFF'}", get_main_menu_markup())
     except Exception as e:
         print(f"[ACTION] Error: {e}")
 
@@ -252,7 +388,7 @@ def send_play(ws):
     if play_handled:
         return
     print("[PLAY] Waiting 0.5 seconds before sending play...")
-    time.sleep(0.5)  # ULTRA: Reduced from 2 to 0.5 seconds
+    time.sleep(0.5)
     if not is_running:
         return
     try:
@@ -283,12 +419,10 @@ def handle_message(data, ws):
         if not isinstance(inner, dict):
             inner = {}
         
-        # Track server time from server messages
         server_time = inner.get("serverTime") or inner.get("timestamp") or inner.get("time")
         if server_time:
             last_server_time = server_time
 
-        # Update fish list from server broadcast
         if route in ["OnUpdateObjects", "OnUpdateObject", "OnObjectDie"]:
             if route == "OnUpdateObjects":
                 objects = inner.get("objects", [])
@@ -310,7 +444,6 @@ def handle_message(data, ws):
                 if f_id in fish_list:
                     del fish_list[f_id]
 
-        # LOGIN RESPONSE (msgId == 1)
         if msg_id == 1:
             if inner.get("ok"):
                 if login_handled:
@@ -330,11 +463,9 @@ def handle_message(data, ws):
                         get_main_menu_markup()
                     )
 
-                # Start heartbeat immediately
                 if not heartbeat_alive:
                     threading.Thread(target=heartbeat_loop, args=(ws,), daemon=True).start()
 
-                # Send play in thread
                 threading.Thread(target=send_play, args=(ws,), daemon=True).start()
             else:
                 login_handled = True
@@ -344,7 +475,6 @@ def handle_message(data, ws):
                 stop_bot_internal()
             return
 
-        # PLAY RESPONSE (msgId == 2)
         if msg_id == 2:
             if play_handled:
                 return
@@ -369,7 +499,7 @@ def handle_message(data, ws):
 def ws_recv_loop(ws):
     while is_running:
         try:
-            ws.settimeout(0.1)  # ULTRA: Reduced from 0.5 to 0.1 seconds
+            ws.settimeout(0.1)
             raw = ws.recv()
             if not raw:
                 break
@@ -381,13 +511,13 @@ def ws_recv_loop(ws):
             reason = e.args[1] if len(e.args) > 1 else "no reason"
             print(f"[WS CLOSED] code={code}, reason={reason}")
             if is_running and config_data["owner_id"]:
-                send_or_edit_message(config_data["owner_id"], f"🔴 Disconnected (code={code}). Reconnecting...", get_main_menu_markup())
+                send_or_edit_message(config_data["owner_id"], f"🔴 Disconnected. Auto reconnecting...", get_main_menu_markup())
             reconnect()
             return
         except Exception as e:
             print(f"[WS ERROR] {type(e).__name__}: {e}")
             if is_running and config_data["owner_id"]:
-                send_or_edit_message(config_data["owner_id"], f"⚠️ WS Error: {e}", get_main_menu_markup())
+                send_or_edit_message(config_data["owner_id"], f"⚠️ WS Error. Auto fix...", get_main_menu_markup())
             reconnect()
             return
 
@@ -418,7 +548,7 @@ def reconnect():
         ws_conn = None
 
     stop_all_threads()
-    print("[RECONNECT] Waiting 2 seconds...")  # ULTRA: Reduced from 5 to 2 seconds
+    print("[RECONNECT] Waiting 2 seconds...")
     time.sleep(2)
 
     if is_running:
@@ -446,7 +576,7 @@ def start_ws():
         if config_data["owner_id"]:
             send_or_edit_message(config_data["owner_id"], "🟢 Connected. Logging in...", get_main_menu_markup())
 
-        time.sleep(0.3)  # ULTRA: Reduced from 1 to 0.3 seconds
+        time.sleep(0.3)
         send_ws(conn, {
             "route": "mytelLogin",
             "data": {"accessToken": token, "language": "my"},
@@ -459,13 +589,13 @@ def start_ws():
     except websocket.WebSocketBadStatusException as e:
         print(f"[WS ERROR] BadStatus: {e}")
         if is_running and config_data["owner_id"]:
-            send_or_edit_message(config_data["owner_id"], f"❌ Connection Failed: {e}", get_main_menu_markup())
-        stop_bot_internal()
+            send_or_edit_message(config_data["owner_id"], f"❌ Connection Failed. Retrying...", get_main_menu_markup())
+        reconnect()
     except Exception as e:
         error_msg = str(e).replace("_", "\\_").replace("*", "\\*")
         print(f"[WS ERROR] {type(e).__name__}: {e}")
         if is_running and config_data["owner_id"]:
-            send_or_edit_message(config_data["owner_id"], f"⚠️ WS Error: {error_msg}", get_main_menu_markup())
+            send_or_edit_message(config_data["owner_id"], f"⚠️ WS Error. Auto fix...", get_main_menu_markup())
         reconnect()
 
 def stop_bot_internal():
@@ -499,12 +629,19 @@ def handle_start_cmd(message):
         return
 
     delete_last_message(user_id)
-    msg = bot.send_message(user_id, f"🤖 *Fish Bot ULTRA SPEED*\n⚡ Shoot: {shoot_interval}s\n🔫 Bullet Speed: {bullet_speed}\n\nSelect action:", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+    msg = bot.send_message(user_id, 
+        f"🤖 *Fish Bot ULTRA SPEED*\n"
+        f"⚡ Shoot: {shoot_interval}s\n"
+        f"🔫 Bullet Speed: {bullet_speed}\n"
+        f"🔄 Auto Restart: {'ON (15min)' if auto_restart_enabled else 'OFF'}\n"
+        f"🔧 Error Fix: Auto\n\n"
+        f"Select action:", 
+        parse_mode="Markdown", reply_markup=get_main_menu_markup())
     last_status_message_id = msg.message_id
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    global is_running, config_data
+    global is_running, config_data, auto_restart_enabled
 
     user_id = call.message.chat.id
     if config_data["owner_id"] != user_id:
@@ -519,7 +656,16 @@ def handle_callback(call):
         if not config_data.get("game_access_token"):
             bot.answer_callback_query(call.id, "❌ Set token first!")
             return
+        
+        # Reset all flags for fresh start
+        login_handled = False
+        play_handled = False
+        in_game = False
+        
         is_running = True
+        last_restart_time = time.time()
+        restart_count = 0
+        
         threading.Thread(target=start_ws, daemon=True).start()
         bot.answer_callback_query(call.id, "⚡ Starting ULTRA SPEED...")
 
@@ -531,6 +677,16 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "🛑 Stopping...")
         send_or_edit_message(user_id, "🔴 Bot Stopped.", get_main_menu_markup())
 
+    elif cmd == "cmd_toggle_restart":
+        auto_restart_enabled = not auto_restart_enabled
+        status = "ON (15min)" if auto_restart_enabled else "OFF"
+        bot.answer_callback_query(call.id, f"Auto Restart: {status}")
+        send_or_edit_message(user_id, f"🔄 Auto Restart: *{status}*", get_main_menu_markup(), parse_mode="Markdown")
+
+    elif cmd == "cmd_force_restart":
+        bot.answer_callback_query(call.id, "🔄 Restarting...")
+        force_restart()
+
     elif cmd == "cmd_token":
         msg = bot.send_message(user_id, "🔑 *Send your Game URL or Access Token:*", parse_mode="Markdown")
         bot.register_next_step_handler(msg, handle_token_input)
@@ -539,7 +695,19 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        msg = f"📊 *Bot Status (ULTRA)*\n\nStatus: {status}\nShooting: {shoot}\nSpeed: {shoot_interval}s/shot\nBullet Speed: {bullet_speed}\nTargeting: {len(fish_list)} fish\nServer Time: {last_server_time}"
+        elapsed = int(time.time() - last_restart_time)
+        mins = elapsed // 60
+        next_restart = 15 - mins if mins < 15 else 0
+        msg = (f"📊 *Bot Status (ULTRA)*\n\n"
+               f"Status: {status}\n"
+               f"Shooting: {shoot}\n"
+               f"Speed: {shoot_interval}s/shot\n"
+               f"Bullet Speed: {bullet_speed}\n"
+               f"Targeting: {len(fish_list)} fish\n"
+               f"🔄 Auto Restart: {'ON' if auto_restart_enabled else 'OFF'}\n"
+               f"⏰ Next restart: {next_restart} min\n"
+               f"🔧 Restarts: {restart_count}\n"
+               f"Server Time: {last_server_time}")
         send_or_edit_message(user_id, msg, get_main_menu_markup())
         bot.answer_callback_query(call.id)
 
@@ -564,15 +732,36 @@ def handle_token_input(message):
     send_or_edit_message(user_id, "✅ Token updated!", get_main_menu_markup())
 
 # ==========================================
-# AUTO-RUN
+# MAIN - AUTO START
 # ==========================================
-if config_data.get("game_access_token"):
-    print("[Auto] Token configured. Starting ULTRA SPEED...")
-    is_running = True
-    threading.Thread(target=start_ws, daemon=True).start()
-
 if __name__ == "__main__":
-    print("Bot polling started... ULTRA SPEED MODE")
+    print("=" * 50)
+    print("🤖 Fish Bot ULTRA SPEED - AUTO START")
+    print(f"⚡ Shoot interval: {shoot_interval}s")
+    print(f"🔫 Bullet speed: {bullet_speed}")
+    print(f"🔄 Auto restart: 15 min")
+    print(f"🔧 Error auto fix: ON")
+    print("=" * 50)
+    
+    # Start auto restart monitor (always running)
+    threading.Thread(target=auto_restart_loop, daemon=True).start()
+    print("[MAIN] Auto restart monitor started.")
+    
+    # Start health monitor (always running)
+    threading.Thread(target=monitor_health, daemon=True).start()
+    print("[MAIN] Health monitor started.")
+    
+    # Auto start if token exists
+    if config_data.get("game_access_token"):
+        print("[Auto] Token configured. Starting bot automatically...")
+        is_running = True
+        last_restart_time = time.time()
+        threading.Thread(target=start_ws, daemon=True).start()
+        print("[Auto] Bot started. ULTRA SPEED MODE!")
+    else:
+        print("[Auto] No token configured. Waiting for Telegram command...")
+    
+    # Start Telegram bot polling
     try:
         bot.infinity_polling()
     except Exception as e:
