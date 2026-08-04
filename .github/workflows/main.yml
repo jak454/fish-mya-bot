@@ -3,12 +3,12 @@ name: Run Fish Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # Run every 6 hours
+    - cron: '0 */6 * * *' # Run every 6 hours
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours max
+    timeout-minutes: 360 # 6 hours max
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,16 +17,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: Validate Secrets
-        run: |
-          if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$GAME_ACCESS_TOKEN" ]; then
-            echo "Error: Required secrets are not set"
-            exit 1
-          fi
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          GAME_ACCESS_TOKEN: ${{ secrets.GAME_ACCESS_TOKEN }}
 
       - name: Install dependencies
         run: |
