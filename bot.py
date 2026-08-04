@@ -57,10 +57,12 @@ last_error_time = 0
 # OPTIMIZED GAME LOGIC VARIABLES - ULTRA SPEED
 # ==========================================
 fire_rate_scale = 1.0
-shoot_interval = 0.002  # ULTRA FAST: 2ms per shot (5x faster than original 10ms)
+shoot_interval = 0.05   # STABLE SPEED: 50ms per shot (Increased for stability)
 bullet_speed = 1400   # Constant bullet speed from analyzed logic
 fish_list = {}        # Store fish data for targeting
+fish_lock = threading.Lock() # Lock for thread-safe fish_list access
 last_server_time = 0  # Track server timestamp for date sync
+last_error_msg = "None" # Track last error for reporting
 
 def load_config():
     global config_data
@@ -163,7 +165,7 @@ def monitor_health():
                         try:
                             bot.send_message(
                                 config_data["owner_id"],
-                                f"🔧 *Auto Fix #{error_count}*\n⚠️ Error ပြဿနာသိတယ်\n🔄 Auto restart လုပ်ပေးနေပါပြီ...",
+                                f"🔧 *Auto Fix #{error_count}*\n⚠️ Error: {last_error_msg}\n🔄 Auto restart လုပ်ပေးနေပါပြီ...",
                                 parse_mode="Markdown"
                             )
                         except: pass
@@ -177,7 +179,7 @@ def monitor_health():
                             try:
                                 bot.send_message(
                                     config_data["owner_id"],
-                                    f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Shoot thread ပြန်စပေးခဲ့တယ်",
+                                    f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Error: {last_error_msg}\n🔄 Shoot thread ပြန်စပေးခဲ့တယ်",
                                     parse_mode="Markdown"
                                 )
                             except: pass
@@ -247,17 +249,17 @@ def heartbeat_loop(ws):
 # SHOOT LOOP - ULTRA SPEED
 # ==========================================
 def auto_shoot_loop(ws):
-    global shoot_alive, is_running, shoot_interval, fish_list, bullet_speed
+    global shoot_alive, is_running, shoot_interval, fish_list, bullet_speed, last_error_msg
     shoot_alive = True
-    print(f"[SHOOT] Thread started - ULTRA SPEED interval: {shoot_interval}s")
+    print(f"[SHOOT] Thread started - STABLE SPEED interval: {shoot_interval}s")
 
     while is_running and shoot_alive:
         try:
             target_ids = []
-            # Thread-safe extraction of current fish keys
-            current_fish_ids = list(fish_list.keys()) 
-            if current_fish_ids:
-                target_ids = [current_fish_ids[0]]
+            with fish_lock:
+                current_fish_ids = list(fish_list.keys()) 
+                if current_fish_ids:
+                    target_ids = [current_fish_ids[0]]
             
             angle_rad = math.radians(random.randint(-45, 45))
             
@@ -286,6 +288,7 @@ def auto_shoot_loop(ws):
                     "msgId": 0
                 })
         except Exception as e:
+            last_error_msg = str(e)
             print(f"[SHOOT] Error: {e}")
             break
         
@@ -389,22 +392,25 @@ def handle_message(data, ws):
             if route == "OnUpdateObjects":
                 objects = inner.get("objects", [])
                 dead_fish = inner.get("deadFish", [])
-                for obj in objects:
-                    f_id = obj.get("id")
-                    if f_id: fish_list[f_id] = obj
-                for df in dead_fish:
-                    f_id = df.get("id")
-                    if f_id in fish_list: del fish_list[f_id]
+                with fish_lock:
+                    for obj in objects:
+                        f_id = obj.get("id")
+                        if f_id: fish_list[f_id] = obj
+                    for df in dead_fish:
+                        f_id = df.get("id")
+                        if f_id in fish_list: del fish_list[f_id]
             
             elif route == "OnUpdateObject":
                 f_id = inner.get("id")
                 if f_id:
-                    fish_list[f_id] = inner
+                    with fish_lock:
+                        fish_list[f_id] = inner
             
             elif route == "OnObjectDie":
                 f_id = inner.get("id")
-                if f_id in fish_list:
-                    del fish_list[f_id]
+                with fish_lock:
+                    if f_id in fish_list:
+                        del fish_list[f_id]
 
         if msg_id == 1:
             if inner.get("ok"):
@@ -562,7 +568,7 @@ def handle_start_cmd(message):
 
     delete_last_message(user_id)
     msg = bot.send_message(user_id, 
-        f"🤖 *Fish Bot ULTRA SPEED*\n"
+        f"🤖 *Fish Bot STABLE SPEED*\n"
         f"⚡ Shoot: {shoot_interval}s\n"
         f"🔫 Bullet Speed: {bullet_speed}\n"
         f"🔧 Error Fix: Auto\n\n"
@@ -595,7 +601,7 @@ def handle_callback(call):
         
         is_running = True
         threading.Thread(target=start_ws, daemon=True).start()
-        bot.answer_callback_query(call.id, "⚡ Starting ULTRA SPEED...")
+        bot.answer_callback_query(call.id, "⚡ Starting STABLE SPEED...")
 
     elif cmd == "cmd_stop":
         if not is_running:
@@ -617,13 +623,14 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        msg = (f"📊 *Bot Status (ULTRA)*\n\n"
+        msg = (f"📊 *Bot Status (STABLE)*\n\n"
                f"Status: {status}\n"
                f"Shooting: {shoot}\n"
                f"Speed: {shoot_interval}s/shot\n"
                f"Bullet Speed: {bullet_speed}\n"
                f"Targeting: {len(fish_list)} fish\n"
-               f"Server Time: {last_server_time}")
+               f"Server Time: {last_server_time}\n"
+               f"Last Error: {last_error_msg}")
         send_or_edit_message(user_id, msg, get_main_menu_markup())
         bot.answer_callback_query(call.id)
 
@@ -652,7 +659,7 @@ def handle_token_input(message):
 # ==========================================
 if __name__ == "__main__":
     print("=" * 50)
-    print("🤖 Fish Bot ULTRA SPEED - AUTO START")
+    print("🤖 Fish Bot STABLE SPEED - AUTO START")
     print(f"⚡ Shoot interval: {shoot_interval}s")
     print(f"🔫 Bullet speed: {bullet_speed}")
     print(f"🔧 Error auto fix: ON")
@@ -667,7 +674,7 @@ if __name__ == "__main__":
         print("[Auto] Token configured. Starting bot automatically...")
         is_running = True
         threading.Thread(target=start_ws, daemon=True).start()
-        print("[Auto] Bot started. ULTRA SPEED MODE!")
+        print("[Auto] Bot started. STABLE SPEED MODE!")
     else:
         print("[Auto] No token configured. Waiting for Telegram command...")
     
