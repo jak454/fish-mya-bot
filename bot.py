@@ -105,11 +105,14 @@ def parse_game_url(url_or_token):
         return url_or_token if url_or_token.startswith("eyJ") else None
 
 def send_ws(ws, payload_dict):
+    global error_count, last_error_msg
     if ws and ws.connected:
         try:
             ws.send(msgpack.packb(payload_dict, use_bin_type=True), opcode=websocket.ABNF.OPCODE_BINARY)
             return True
         except Exception as e:
+            error_count += 1
+            last_error_msg = f"Send error: {str(e)}"
             print(f"[SEND] Error: {e}")
     return False
 
@@ -220,31 +223,31 @@ def monitor_health():
     print("[MONITOR] Health monitor started.")
     
     while monitor_alive:
-        time.sleep(5)
+        time.sleep(2) # Check more frequently
         
         try:
-            if is_running and not shoot_alive:
-                # If we are in the middle of a cycle pause, don't treat as error
-                if not ws_conn:
-                    continue
-                    
+            if not is_running:
+                continue
+
+            # Check for accumulated errors
+            if error_count >= max_errors:
+                if config_data["owner_id"]:
+                    track_and_send(config_data["owner_id"], f"🔧 *Auto Fix ({error_count}/{max_errors})*\n⚠️ Last Error: {last_error_msg}\n🛑 Stopping and Restarting...")
+                error_count = 0
+                force_restart()
+                continue
+
+            # Check for dead threads
+            if not shoot_alive and ws_conn and ws_conn.connected:
                 error_count += 1
                 last_error_time = time.time()
-                
-                if error_count >= max_errors:
-                    if config_data["owner_id"]:
-                        track_and_send(config_data["owner_id"], f"🔧 *Auto Fix #{error_count}*\n⚠️ Error: {last_error_msg}\n🔄 Auto restart...")
-                    error_count = 0
-                    force_restart()
-                else:
-                    if ws_conn and ws_conn.connected:
-                        threading.Thread(target=auto_shoot_loop, args=(ws_conn,), daemon=True).start()
-                        if config_data["owner_id"]:
-                            track_and_send(config_data["owner_id"], f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Thread restarted")
+                last_error_msg = "Shoot thread died"
+                threading.Thread(target=auto_shoot_loop, args=(ws_conn,), daemon=True).start()
+                if config_data["owner_id"]:
+                    track_and_send(config_data["owner_id"], f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Shoot thread restarted")
             
-            elif is_running and not heartbeat_alive:
-                if ws_conn and ws_conn.connected:
-                    threading.Thread(target=heartbeat_loop, args=(ws_conn,), daemon=True).start()
+            if not heartbeat_alive and ws_conn and ws_conn.connected:
+                threading.Thread(target=heartbeat_loop, args=(ws_conn,), daemon=True).start()
                     
         except Exception as e:
             print(f"[MONITOR] Error: {e}")
@@ -347,7 +350,8 @@ def auto_shoot_loop(ws):
                     "msgId": 0
                 })
         except Exception as e:
-            last_error_msg = str(e)
+            error_count += 1
+            last_error_msg = f"Shoot error: {str(e)}"
             break
         
         time.sleep(shoot_interval)
@@ -411,6 +415,7 @@ def send_play(ws):
 def handle_message(data, ws):
     global game_creds, login_handled, play_handled, shoot_interval, fish_list, last_server_time
 
+    global error_count, last_error_msg
     try:
         decoded = msgpack.unpackb(data, raw=False)
         if not isinstance(decoded, dict):
@@ -457,20 +462,11 @@ def handle_message(data, ws):
                 login_handled = True
                 game_creds["username"] = inner.get("username", "")
                 game_creds["password"] = inner.get("password", "")
-                balance = inner.get("cash", 0)
-                nickname = inner.get("nickname", "User")
-                level = inner.get("level", 0)
-
-                if config_data["owner_id"]:
-                    clean_and_send_menu(config_data["owner_id"], f"✅ *Login OK!*\n👤 {nickname}\n⭐ Level: {level}\n💰 Balance: {balance:,}\n\n⚡ Entering room...")
-
-                if not heartbeat_alive:
-                    threading.Thread(target=heartbeat_loop, args=(ws,), daemon=True).start()
-                threading.Thread(target=send_play, args=(ws,), daemon=True).start()
+                send_play(ws)
             else:
-                login_handled = True
+                reconnect()
 
-        elif msg_id == 2:
+        if route == "play":
             if inner.get("ok"):
                 if play_handled:
                     return
@@ -480,14 +476,16 @@ def handle_message(data, ws):
                 reconnect()
 
     except Exception as e:
+        error_count += 1
+        last_error_msg = f"Message handler error: {str(e)}"
         print(f"[MSG] Error: {e}")
 
 def ws_recv_loop(ws):
     while ws.connected:
         try:
-            if not is_running: break
             data = ws.recv()
-            if not data: break
+            if not data:
+                break
             handle_message(data, ws)
         except:
             break
@@ -502,15 +500,12 @@ def stop_all_threads():
 def reconnect():
     global ws_conn, is_running
     with ws_lock:
-        if not is_running:
-            return
         try:
             if ws_conn:
                 ws_conn.close()
         except:
             pass
         ws_conn = None
-
     stop_all_threads()
     time.sleep(2)
     if is_running:
@@ -522,8 +517,7 @@ def start_ws():
     token = config_data.get("game_access_token")
     if not token:
         return
-
-    url = f"{WS_URL}?access_token={token}"
+    url = f"{WS_URL}?access_token={{token}}"
     try:
         conn = websocket.create_connection(
             url,
@@ -533,10 +527,8 @@ def start_ws():
         )
         with ws_lock:
             ws_conn = conn
-
         if config_data["owner_id"]:
             clean_and_send_menu(config_data["owner_id"], "🟢 Connected. Logging in...")
-        
         print("[WS] Connection established. Sending login...")
         time.sleep(0.3)
         send_ws(conn, {
@@ -567,7 +559,6 @@ def stop_bot_internal():
 def handle_start_cmd(message):
     global config_data
     user_id = message.chat.id
-
     if config_data["owner_id"] is None:
         config_data["owner_id"] = user_id
         save_config()
@@ -575,18 +566,16 @@ def handle_start_cmd(message):
     elif config_data["owner_id"] != user_id:
         bot.send_message(user_id, "⛔ Not authorized.")
         return
-
     clean_and_send_menu(user_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     global is_running, config_data, login_handled, play_handled, in_game
-
     user_id = call.message.chat.id
     if config_data["owner_id"] != user_id:
         bot.answer_callback_query(call.id, "⛔ Not authorized.")
         return
-
+    
     cmd = call.data
     if cmd == "cmd_start":
         if is_running:
@@ -605,7 +594,7 @@ def handle_callback(call):
         if not cycle_alive:
             threading.Thread(target=cycle_manager_loop, daemon=True).start()
         bot.answer_callback_query(call.id, "⚡ Starting (30s Cycle)...")
-
+    
     elif cmd == "cmd_stop":
         if not is_running:
             bot.answer_callback_query(call.id, "⚠️ Already stopped.")
@@ -613,26 +602,26 @@ def handle_callback(call):
         stop_bot_internal()
         bot.answer_callback_query(call.id, "🛑 Stopping...")
         clean_and_send_menu(user_id, "🔴 Bot Stopped.")
-
+    
     elif cmd == "cmd_force_restart":
         bot.answer_callback_query(call.id, "🔄 Restarting...")
         force_restart()
-
+    
     elif cmd == "cmd_token":
         msg = bot.send_message(user_id, "🔑 *Send your Game URL or Access Token:*", parse_mode="Markdown")
         bot.register_next_step_handler(msg, handle_token_input)
         bot.answer_callback_query(call.id)
-
+    
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
         msg = (f"📊 *Bot Status (ULTRA)*\n\n" 
-               f"Status: {status}\n" 
-               f"Shooting: {shoot}\n" 
-               f"Speed: {shoot_interval}s/shot\n" 
-               f"Bullet Speed: {bullet_speed}\n" 
-               f"Targeting: {len(fish_list)} fish\n" 
-               f"Server Time: {last_server_time}")
+               f"Status: {{status}}\n" 
+               f"Shooting: {{shoot}}\n" 
+               f"Speed: {{shoot_interval}}s/shot\n" 
+               f"Bullet Speed: {{bullet_speed}}\n" 
+               f"Targeting: {{len(fish_list)}} fish\n" 
+               f"Server Time: {{last_server_time}}")
         clean_and_send_menu(user_id, msg)
         bot.answer_callback_query(call.id)
 
@@ -641,11 +630,9 @@ def handle_token_input(message):
     user_id = message.chat.id
     raw = message.text.strip()
     token = parse_game_url(raw)
-
     if not token:
         bot.send_message(user_id, "❌ Invalid. Try again.")
         return
-
     config_data["game_access_token"] = token
     save_config()
     try: bot.delete_message(user_id, message.message_id)
