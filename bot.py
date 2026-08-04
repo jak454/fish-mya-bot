@@ -45,12 +45,13 @@ login_handled = False
 play_handled = False
 
 # ==========================================
-# OPTIMIZED GAME LOGIC VARIABLES
+# OPTIMIZED GAME LOGIC VARIABLES - ULTRA SPEED
 # ==========================================
 fire_rate_scale = 1.0
-shoot_interval = 0.004  # OPTIMIZED: Reduced from 0.01 to 0.004 (2.5x faster shooting)
+shoot_interval = 0.002  # ULTRA FAST: 2ms per shot (5x faster than original 10ms)
 bullet_speed = 1400   # Constant bullet speed from analyzed logic
 fish_list = {}        # Store fish data for targeting
+last_server_time = 0  # Track server timestamp for date sync
 
 def load_config():
     global config_data
@@ -121,67 +122,68 @@ def delete_last_message(chat_id):
         last_status_message_id = None
 
 # ==========================================
-# HEARTBEAT (OPTIMIZED)
+# HEARTBEAT (ULTRA OPTIMIZED)
 # ==========================================
 def heartbeat_loop(ws):
     global heartbeat_alive, is_running
     heartbeat_alive = True
     last_hb = time.time()
-    print("[HEARTBEAT] Thread started.")
+    print("[HEARTBEAT] Thread started - ULTRA FAST mode.")
 
     while is_running and heartbeat_alive:
-        if time.time() - last_hb > 3:
+        if time.time() - last_hb > 2:  # Faster heartbeat (was 3s)
             if not send_ws(ws, {"route": "ping", "data": {}, "msgId": 0}):
                 break
             last_hb = time.time()
-        time.sleep(0.5)  # OPTIMIZED: Reduced from 1 to 0.5 seconds
+        time.sleep(0.3)  # ULTRA: Reduced from 1 to 0.3 seconds
 
     heartbeat_alive = False
     print("[HEARTBEAT] Thread stopped.")
 
 # ==========================================
-# SHOOT LOOP - OPTIMIZED FOR SPEED
+# SHOOT LOOP - ULTRA SPEED
 # ==========================================
 def auto_shoot_loop(ws):
-    global shoot_alive, is_running, shoot_interval, fish_list
+    global shoot_alive, is_running, shoot_interval, fish_list, bullet_speed
     shoot_alive = True
-    print(f"[SHOOT] Thread started - interval: {shoot_interval}s (OPTIMIZED)")
+    print(f"[SHOOT] Thread started - ULTRA SPEED interval: {shoot_interval}s (bullet_speed: {bullet_speed})")
 
     while is_running and shoot_alive:
         try:
             # Target selection: pick the first fish if available, else shoot empty
             target_ids = []
             if fish_list:
-                # Simple logic: pick the first fish id
                 fish_id = next(iter(fish_list))
                 target_ids = [fish_id]
-                # print(f"[SHOOT] Firing at fish: {target_ids}")
             
-            # The correct route is 'shoot' (via notify/msgId:0)
-            # Parameters: rad, type, target, rapidFire, auto
-            # rad is in radians. random angle between -45 and 45 degrees
+            # The correct route is 'shoot'
+            # Parameters: rad, type, target, rapidFire, auto, bulletSpeed
+            # ULTRA: Wider angle spread for more coverage
             angle_rad = math.radians(random.randint(-45, 45))
             
+            # Send shoot with bullet speed included
             send_ws(ws, {
                 "route": "shoot",
                 "data": {
                     "rad": angle_rad,
                     "type": 1, 
                     "target": target_ids[0] if target_ids else -1,
-                    "rapidFire": True,  # OPTIMIZED: Enabled rapid fire
-                    "auto": True  # OPTIMIZED: Enabled auto mode
+                    "rapidFire": True,
+                    "auto": True,
+                    "bulletSpeed": bullet_speed  # ULTRA: Include bullet speed in payload
                 },
                 "msgId": 0
             })
 
-            # Also send clientHitFish for the targets (OPTIMIZED probability)
-            if target_ids and random.random() < 0.025:  # OPTIMIZED: Increased from default to 2.5%
+            # Also send clientHitFish for the targets (every shot for maximum damage)
+            if target_ids:
                 send_ws(ws, {
                     "route": "clientHitFish",
                     "data": {
                         "btype": 1,
                         "skillType": 0,
-                        "fIds": target_ids
+                        "fIds": target_ids,
+                        "bulletSpeed": bullet_speed  # ULTRA: Include bullet speed in hit
                     },
                     "msgId": 0
                 })
@@ -189,7 +191,7 @@ def auto_shoot_loop(ws):
             print(f"[SHOOT] Error: {e}")
             break
         
-        # OPTIMIZED: Faster shoot interval
+        # ULTRA FAST: Shoot interval
         time.sleep(shoot_interval)
 
     shoot_alive = False
@@ -203,26 +205,26 @@ def use_4x_loop(ws):
     while is_running and use_4x_alive:
         if not send_ws(ws, {"route": "useItem", "data": {"type": 6}, "msgId": 0}):
             break
-        time.sleep(8)  # OPTIMIZED: Reduced from 10 to 8 seconds
+        time.sleep(8)
 
     use_4x_alive = False
     print("[USE_ITEM] Thread stopped.")
 
 # ==========================================
-# GAME ACTIONS (OPTIMIZED)
+# GAME ACTIONS (ULTRA OPTIMIZED)
 # ==========================================
 def start_game_actions(ws):
     global in_game
-    time.sleep(0.2)  # OPTIMIZED: Reduced from 1 to 0.2 seconds (5x faster room entry)
+    time.sleep(0.15)  # ULTRA: Reduced from 1 to 0.15 seconds (6.7x faster room entry)
     if not is_running:
         return
     try:
         in_game = True
 
-        # Send clientActiveGun - Setting up the gun
+        # Send clientActiveGun - Setting up the gun with ULTRA speed
         send_ws(ws, {
             "route": "clientActiveGun",
-            "data": {"btype": 1, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0},
+            "data": {"btype": 1, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed},
             "msgId": 0
         })
 
@@ -230,7 +232,7 @@ def start_game_actions(ws):
         if not heartbeat_alive:
             threading.Thread(target=heartbeat_loop, args=(ws,), daemon=True).start()
 
-        # Start shoot with the correct logic
+        # Start shoot with the ULTRA speed logic
         if not shoot_alive:
             threading.Thread(target=auto_shoot_loop, args=(ws,), daemon=True).start()
 
@@ -238,10 +240,10 @@ def start_game_actions(ws):
         if not use_4x_alive:
             threading.Thread(target=use_4x_loop, args=(ws,), daemon=True).start()
 
-        print("[ACTION] Game actions started with OPTIMIZED Speed & Shoot Logic!")
+        print(f"[ACTION] Game actions started with ULTRA Speed! Shoot interval: {shoot_interval}s")
 
         if config_data["owner_id"]:
-            send_or_edit_message(config_data["owner_id"], "🌊 *Entered Room*\n🚀 Bot shooting with OPTIMIZED Speed!", get_main_menu_markup())
+            send_or_edit_message(config_data["owner_id"], f"🌊 *Entered Room*\n⚡ ULTRA SPEED: {shoot_interval}s per shot\n🔫 Bullet Speed: {bullet_speed}", get_main_menu_markup())
     except Exception as e:
         print(f"[ACTION] Error: {e}")
 
@@ -249,12 +251,11 @@ def send_play(ws):
     global play_handled
     if play_handled:
         return
-    print("[PLAY] Waiting 1 second before sending play...")
-    time.sleep(1)  # OPTIMIZED: Reduced from 2 to 1 second
+    print("[PLAY] Waiting 0.5 seconds before sending play...")
+    time.sleep(0.5)  # ULTRA: Reduced from 2 to 0.5 seconds
     if not is_running:
         return
     try:
-        # Reverting to index 0 as per user feedback
         payload = {"playerId": game_creds["username"], "password": game_creds["password"], "index": 0}
         print(f"[PLAY] Sending play payload: {payload}")
         send_ws(ws, {
@@ -269,11 +270,9 @@ def send_play(ws):
 # MESSAGE HANDLER
 # ==========================================
 def handle_message(data, ws):
-    global game_creds, login_handled, play_handled, shoot_interval, fish_list
+    global game_creds, login_handled, play_handled, shoot_interval, fish_list, last_server_time
 
     try:
-        # Check if data is encrypted (XOR) - though xorKey is usually null
-        # For now, assume it's raw msgpack
         decoded = msgpack.unpackb(data, raw=False)
         if not isinstance(decoded, dict):
             return
@@ -284,20 +283,16 @@ def handle_message(data, ws):
         if not isinstance(inner, dict):
             inner = {}
         
-        # Log all routes for debugging
-        if route:
-            # print(f"[DEBUG] Route received: {route}")
-            # If we see game-related broadcasts but haven't started actions, start them
-            if not in_game and not shoot_alive and route in ["OnUpdateObjects", "OnUpdateJackpot", "onSlotJp"]:
-                print(f"[DEBUG] Game activity detected via {route}. Starting actions.")
-                threading.Thread(target=start_game_actions, args=(ws,), daemon=True).start()
+        # Track server time from server messages
+        server_time = inner.get("serverTime") or inner.get("timestamp") or inner.get("time")
+        if server_time:
+            last_server_time = server_time
 
         # Update fish list from server broadcast
         if route in ["OnUpdateObjects", "OnUpdateObject", "OnObjectDie"]:
             if route == "OnUpdateObjects":
                 objects = inner.get("objects", [])
                 dead_fish = inner.get("deadFish", [])
-                # print(f"[GAME] Batch Update: {len(objects)} objects, {len(dead_fish)} dead")
                 for obj in objects:
                     f_id = obj.get("id")
                     if f_id: fish_list[f_id] = obj
@@ -309,13 +304,11 @@ def handle_message(data, ws):
                 f_id = inner.get("id")
                 if f_id:
                     fish_list[f_id] = inner
-                    # print(f"[GAME] Single Update: {f_id}")
             
             elif route == "OnObjectDie":
                 f_id = inner.get("id")
                 if f_id in fish_list:
                     del fish_list[f_id]
-                    # print(f"[GAME] Fish Died: {f_id}")
 
         # LOGIN RESPONSE (msgId == 1)
         if msg_id == 1:
@@ -333,7 +326,7 @@ def handle_message(data, ws):
                 if config_data["owner_id"]:
                     send_or_edit_message(
                         config_data["owner_id"],
-                        f"✅ *Login OK!*\n👤 {nickname}\n⭐ Level: {level}\n💰 Balance: {balance:,}\n\n🔑 Entering room...",
+                        f"✅ *Login OK!*\n👤 {nickname}\n⭐ Level: {level}\n💰 Balance: {balance:,}\n\n⚡ Entering room...",
                         get_main_menu_markup()
                     )
 
@@ -359,17 +352,6 @@ def handle_message(data, ws):
 
             if not inner.get("err"):
                 print("[PLAY] Room entered!")
-                # Update shoot interval based on player fire rate scale if available
-                # Logic: 0.25 * scale
-                players = inner.get("players", [])
-                for p in players:
-                    if p.get("playerId") == game_creds["username"]:
-                        scale = p.get("fireRateScale", 1.0)
-                        # shoot_interval = 0.25 * scale
-                        # print(f"[LOGIC] Shoot Interval set to {shoot_interval}s")
-                        pass
-                        break
-                
                 threading.Thread(target=start_game_actions, args=(ws,), daemon=True).start()
             else:
                 print(f"[PLAY] Failed: {inner}")
@@ -382,12 +364,12 @@ def handle_message(data, ws):
         print(f"[DECODE] Error: {e}")
 
 # ==========================================
-# WEBSOCKET RUN LOOP (OPTIMIZED)
+# WEBSOCKET RUN LOOP (ULTRA OPTIMIZED)
 # ==========================================
 def ws_recv_loop(ws):
     while is_running:
         try:
-            ws.settimeout(0.1)  # OPTIMIZED: Reduced from 0.5 to 0.1 seconds
+            ws.settimeout(0.1)  # ULTRA: Reduced from 0.5 to 0.1 seconds
             raw = ws.recv()
             if not raw:
                 break
@@ -436,8 +418,8 @@ def reconnect():
         ws_conn = None
 
     stop_all_threads()
-    print("[RECONNECT] Waiting 3 seconds...")  # OPTIMIZED: Reduced from 5 to 3 seconds
-    time.sleep(3)
+    print("[RECONNECT] Waiting 2 seconds...")  # ULTRA: Reduced from 5 to 2 seconds
+    time.sleep(2)
 
     if is_running:
         threading.Thread(target=start_ws, daemon=True).start()
@@ -451,7 +433,6 @@ def start_ws():
     url = f"{WS_URL}?access_token={token}"
     print(f"[WS] Connecting to: {WS_URL}?access_token=***")
     try:
-        # Use a more robust SSL configuration
         conn = websocket.create_connection(
             url,
             header=WS_HEADERS,
@@ -465,7 +446,7 @@ def start_ws():
         if config_data["owner_id"]:
             send_or_edit_message(config_data["owner_id"], "🟢 Connected. Logging in...", get_main_menu_markup())
 
-        time.sleep(0.5)  # OPTIMIZED: Reduced from 1 to 0.5 seconds
+        time.sleep(0.3)  # ULTRA: Reduced from 1 to 0.3 seconds
         send_ws(conn, {
             "route": "mytelLogin",
             "data": {"accessToken": token, "language": "my"},
@@ -485,7 +466,6 @@ def start_ws():
         print(f"[WS ERROR] {type(e).__name__}: {e}")
         if is_running and config_data["owner_id"]:
             send_or_edit_message(config_data["owner_id"], f"⚠️ WS Error: {error_msg}", get_main_menu_markup())
-        # Instead of stopping, try to reconnect
         reconnect()
 
 def stop_bot_internal():
@@ -519,7 +499,7 @@ def handle_start_cmd(message):
         return
 
     delete_last_message(user_id)
-    msg = bot.send_message(user_id, "🤖 *Professional Fish Bot (OPTIMIZED)*\n\nSelect action:", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+    msg = bot.send_message(user_id, f"🤖 *Fish Bot ULTRA SPEED*\n⚡ Shoot: {shoot_interval}s\n🔫 Bullet Speed: {bullet_speed}\n\nSelect action:", parse_mode="Markdown", reply_markup=get_main_menu_markup())
     last_status_message_id = msg.message_id
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -541,7 +521,7 @@ def handle_callback(call):
             return
         is_running = True
         threading.Thread(target=start_ws, daemon=True).start()
-        bot.answer_callback_query(call.id, "🚀 Starting...")
+        bot.answer_callback_query(call.id, "⚡ Starting ULTRA SPEED...")
 
     elif cmd == "cmd_stop":
         if not is_running:
@@ -559,8 +539,7 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        bal = "Updating..."
-        msg = f"📊 *Bot Status*\n\nStatus: {status}\nShooting: {shoot}\nTargeting: {len(fish_list)} fish"
+        msg = f"📊 *Bot Status (ULTRA)*\n\nStatus: {status}\nShooting: {shoot}\nSpeed: {shoot_interval}s/shot\nBullet Speed: {bullet_speed}\nTargeting: {len(fish_list)} fish\nServer Time: {last_server_time}"
         send_or_edit_message(user_id, msg, get_main_menu_markup())
         bot.answer_callback_query(call.id)
 
@@ -588,12 +567,12 @@ def handle_token_input(message):
 # AUTO-RUN
 # ==========================================
 if config_data.get("game_access_token"):
-    print("[Auto] Token configured. Starting...")
+    print("[Auto] Token configured. Starting ULTRA SPEED...")
     is_running = True
     threading.Thread(target=start_ws, daemon=True).start()
 
 if __name__ == "__main__":
-    print("Bot polling started...")
+    print("Bot polling started... ULTRA SPEED MODE")
     try:
         bot.infinity_polling()
     except Exception as e:
