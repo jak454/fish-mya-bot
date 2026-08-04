@@ -536,7 +536,7 @@ def start_ws():
 
         if config_data["owner_id"]:
             clean_and_send_menu(config_data["owner_id"], "🟢 Connected. Logging in...")
-
+        
         print("[WS] Connection established. Sending login...")
         time.sleep(0.3)
         send_ws(conn, {
@@ -580,7 +580,7 @@ def handle_start_cmd(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    global is_running, config_data, login_handled, play_handled, in_game, cycle_alive
+    global is_running, config_data, login_handled, play_handled, in_game
 
     user_id = call.message.chat.id
     if config_data["owner_id"] != user_id:
@@ -626,12 +626,12 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        msg = (f"📊 *Bot Status (ULTRA)*\n\n"
-               f"Status: {status}\n"
-               f"Shooting: {shoot}\n"
-               f"Speed: {shoot_interval}s/shot\n"
-               f"Bullet Speed: {bullet_speed}\n"
-               f"Targeting: {len(fish_list)} fish\n"
+        msg = (f"📊 *Bot Status (ULTRA)*\n\n" 
+               f"Status: {status}\n" 
+               f"Shooting: {shoot}\n" 
+               f"Speed: {shoot_interval}s/shot\n" 
+               f"Bullet Speed: {bullet_speed}\n" 
+               f"Targeting: {len(fish_list)} fish\n" 
                f"Server Time: {last_server_time}")
         clean_and_send_menu(user_id, msg)
         bot.answer_callback_query(call.id)
