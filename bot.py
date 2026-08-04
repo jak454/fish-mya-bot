@@ -61,7 +61,7 @@ last_error_time = 0
 # OPTIMIZED GAME LOGIC VARIABLES - ULTRA SPEED
 # ==========================================
 fire_rate_scale = 1.0
-shoot_interval = 0.002  # ULTRA FAST: 2ms per shot (5x faster than original 10ms)
+shoot_interval = 0.001  # DOUBLE SPEED: 1ms per shot (2x faster than 2ms)
 bullet_speed = 1400   # Constant bullet speed from analyzed logic
 fish_list = {}        # Store fish data for targeting
 last_server_time = 0  # Track server timestamp for date sync
@@ -181,21 +181,20 @@ def force_restart():
     threading.Thread(target=start_ws, daemon=True).start()
 
 def monitor_health():
-    """Error monitoring - error ဖြစ်ရင် auto restart"""
+    """Monitor only heartbeat, no shoot thread auto restart"""
     global error_count, max_errors, last_error_time, monitor_alive
     
     monitor_alive = True
-    print("[MONITOR] Health monitor started.")
+    print("[MONITOR] Health monitor started (heartbeat only).")
     
     while monitor_alive:
         time.sleep(5)  # Check every 5 seconds
         
         try:
-            # Check if shoot thread is dead while bot should be running
-            if is_running and not shoot_alive:
+            # Check if heartbeat is dead while running
+            if is_running and not heartbeat_alive:
                 error_count += 1
-                last_error_time = time.time()
-                print(f"[MONITOR] Shoot thread died! Error count: {error_count}/{max_errors}")
+                print(f"[MONITOR] Heartbeat thread died! Error count: {error_count}/{max_errors}")
                 
                 if error_count >= max_errors:
                     print("[MONITOR] Too many errors! Force restart...")
@@ -210,27 +209,9 @@ def monitor_health():
                     error_count = 0
                     force_restart()
                 else:
-                    print("[MONITOR] Restarting shoot thread...")
-                    # Try to restart just the shoot thread first
                     if ws_conn and ws_conn.connected:
-                        threading.Thread(target=auto_shoot_loop, args=(ws_conn,), daemon=True).start()
-                        if config_data["owner_id"]:
-                            try:
-                                bot.send_message(
-                                    config_data["owner_id"],
-                                    f"🔧 *Auto Fix #{error_count}/{max_errors}*\n⚠️ Shoot thread ပြန်စပေးခဲ့တယ်",
-                                    parse_mode="Markdown"
-                                )
-                            except: pass
-            
-            # Check if heartbeat is dead while running
-            elif is_running and not heartbeat_alive:
-                error_count += 1
-                print(f"[MONITOR] Heartbeat thread died! Error count: {error_count}/{max_errors}")
-                
-                if ws_conn and ws_conn.connected:
-                    threading.Thread(target=heartbeat_loop, args=(ws_conn,), daemon=True).start()
-                    print("[MONITOR] Heartbeat restarted.")
+                        threading.Thread(target=heartbeat_loop, args=(ws_conn,), daemon=True).start()
+                        print("[MONITOR] Heartbeat restarted.")
                     
         except Exception as e:
             print(f"[MONITOR] Error: {e}")
@@ -277,11 +258,11 @@ def heartbeat_loop(ws):
     print("[HEARTBEAT] Thread started - ULTRA FAST mode.")
 
     while is_running and heartbeat_alive:
-        if time.time() - last_hb > 2:
+        if time.time() - last_hb > 1:  # 2x faster: was 2s, now 1s
             if not send_ws(ws, {"route": "ping", "data": {}, "msgId": 0}):
                 break
             last_hb = time.time()
-        time.sleep(0.3)
+        time.sleep(0.15)  # 2x faster: was 0.3s, now 0.15s
 
     heartbeat_alive = False
     print("[HEARTBEAT] Thread stopped.")
@@ -344,7 +325,7 @@ def use_4x_loop(ws):
     while is_running and use_4x_alive:
         if not send_ws(ws, {"route": "useItem", "data": {"type": 6}, "msgId": 0}):
             break
-        time.sleep(8)
+        time.sleep(4)  # 2x faster: was 8s, now 4s
 
     use_4x_alive = False
     print("[USE_ITEM] Thread stopped.")
