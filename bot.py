@@ -50,6 +50,13 @@ login_handled = False
 play_handled = False
 
 # ==========================================
+# CYCLE CONFIGURATION
+# ==========================================
+cycle_alive = False
+cycle_duration = 30
+cycle_pause = 5
+
+# ==========================================
 # ERROR MONITORING
 # ==========================================
 monitor_alive = False
@@ -217,6 +224,10 @@ def monitor_health():
         
         try:
             if is_running and not shoot_alive:
+                # If we are in the middle of a cycle pause, don't treat as error
+                if not ws_conn:
+                    continue
+                    
                 error_count += 1
                 last_error_time = time.time()
                 
@@ -237,6 +248,43 @@ def monitor_health():
                     
         except Exception as e:
             print(f"[MONITOR] Error: {e}")
+
+def cycle_manager_loop():
+    """Manage 30s run / 5s pause cycles"""
+    global cycle_alive, is_running
+    cycle_alive = True
+    print("[CYCLE] Manager started.")
+    
+    while cycle_alive:
+        if not is_running:
+            time.sleep(1)
+            continue
+            
+        # Run for 30 seconds
+        time.sleep(cycle_duration)
+        
+        if not cycle_alive or not is_running:
+            continue
+            
+        print(f"[CYCLE] Cycle finished. Pausing for {cycle_pause}s...")
+        
+        # Stop current session
+        stop_all_threads()
+        with ws_lock:
+            try:
+                if ws_conn:
+                    ws_conn.close()
+            except: pass
+        
+        # Pause for 5 seconds
+        time.sleep(cycle_pause)
+        
+        if not cycle_alive or not is_running:
+            continue
+            
+        print("[CYCLE] Restarting next cycle...")
+        # Restart
+        threading.Thread(target=start_ws, daemon=True).start()
 
 # ==========================================
 # HEARTBEAT
@@ -491,36 +539,53 @@ def start(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cmd_'))
 def handle_callback(call):
-    global is_running, config_data
+    global is_running, config_data, cycle_alive, monitor_alive
     
-    if call.data == "cmd_start":
-        if not config_data["game_access_token"]:
-            bot.answer_callback_query(call.id, "⚠️ Please set token first!")
+    user_id = call.from_user.id
+    if config_data["owner_id"] != user_id:
+        bot.answer_callback_query(call.id, "⛔ Not authorized.")
+        return
+
+    cmd = call.data
+    if cmd == "cmd_start":
+        if is_running:
+            bot.answer_callback_query(call.id, "⚠️ Already running.")
             return
+        if not config_data.get("game_access_token"):
+            bot.answer_callback_query(call.id, "❌ Set token first!")
+            return
+        login_handled = False
+        play_handled = False
+        in_game = False
         is_running = True
         threading.Thread(target=start_ws, daemon=True).start()
         if not monitor_alive:
             threading.Thread(target=monitor_health, daemon=True).start()
-        bot.answer_callback_query(call.id, "▶️ Bot Starting...")
-        
-    elif call.data == "cmd_stop":
+        if not cycle_alive:
+            threading.Thread(target=cycle_manager_loop, daemon=True).start()
+        bot.answer_callback_query(call.id, "⚡ Starting (30s Cycle)... ")
+
+    elif cmd == "cmd_stop":
+        if not is_running:
+            bot.answer_callback_query(call.id, "⚠️ Not running.")
+            return
         is_running = False
         reconnect()
         bot.answer_callback_query(call.id, "🛑 Bot Stopped")
         clean_and_send_menu(call.message.chat.id, "🛑 *Bot Stopped Successfully*")
-        
-    elif call.data == "cmd_token":
+
+    elif cmd == "cmd_token":
         msg = bot.send_message(call.message.chat.id, "🔑 *Please send your Game URL or Access Token:*", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_token)
         
-    elif call.data == "cmd_status":
+    elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         ws_status = "✅ Connected" if ws_conn and ws_conn.connected else "❌ Disconnected"
         targets = len(fish_list)
         bot.answer_callback_query(call.id, f"Status: {status}")
         track_and_send(call.message.chat.id, f"📊 *Bot Status*\n\nState: {status}\nWS: {ws_status}\n🐟 Active Fish: {targets}\n⚡ Speed: {shoot_interval}s\n🔄 Auto Restart: {config_data.get('auto_restart')}")
 
-    elif call.data == "cmd_force_restart":
+    elif cmd == "cmd_force_restart":
         bot.answer_callback_query(call.id, "🔧 Force Restarting...")
         force_restart()
 
