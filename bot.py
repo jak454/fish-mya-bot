@@ -349,6 +349,7 @@ def handle_message(data, ws):
         msg_id = decoded.get("msgId", -1)
         inner = decoded.get("data", decoded)
         if not isinstance(inner, dict): inner = {}
+        print(f"[WS] Received route: {route}, msgId: {msg_id}", flush=True)
         
         if route == "OnUpdateObjects":
             objects = inner.get("objects", [])
