@@ -59,6 +59,39 @@ login_handled = False
 play_handled = False
 
 # ==========================================
+# STATISTICS TRACKING
+# ==========================================
+stats = {
+    "requests_sent": 0,
+    "coins_spent": 0,
+    "coins_gained": 0,
+    "fish_killed": 0,
+    "start_balance": 0,
+    "current_balance": 0
+}
+stats_lock = threading.Lock()
+
+def reset_session_stats():
+    global stats
+    with stats_lock:
+        stats["requests_sent"] = 0
+        stats["coins_spent"] = 0
+        stats["coins_gained"] = 0
+        stats["fish_killed"] = 0
+
+def log_stats():
+    with stats_lock:
+        profit = stats["coins_gained"] - stats["coins_spent"]
+        print(f"\n--- SESSION STATISTICS ---", flush=True)
+        print(f"Requests Sent: {stats['requests_sent']}", flush=True)
+        print(f"Coins Spent: {stats['coins_spent']:,}", flush=True)
+        print(f"Coins Gained: {stats['coins_gained']:,}", flush=True)
+        print(f"Net Profit: {profit:,}", flush=True)
+        print(f"Fish Killed: {stats['fish_killed']}", flush=True)
+        print(f"Current Balance: {stats['current_balance']:,}", flush=True)
+        print(f"--------------------------\n", flush=True)
+
+# ==========================================
 # CYCLE CONFIGURATION
 # ==========================================
 cycle_duration = 30
@@ -66,7 +99,7 @@ cycle_pause = 5
 
 # ==========================================
 # ERROR MONITORING
-# ===========================================
+# ==========================================
 error_count = 0
 max_errors = 1 # Restart immediately on any error
 last_error_msg = "None"
@@ -113,10 +146,16 @@ def parse_game_url(url_or_token):
         return url_or_token if url_or_token.startswith("eyJ") else None
 
 def send_ws(ws, payload_dict):
-    global error_count, last_error_msg
+    global error_count, last_error_msg, stats
     if ws and ws.connected:
         try:
             ws.send(msgpack.packb(payload_dict, use_bin_type=True), opcode=websocket.ABNF.OPCODE_BINARY)
+            with stats_lock:
+                stats["requests_sent"] += 1
+                # Track coin spending on shoot
+                if payload_dict.get("route") == "shoot":
+                    # Assume bullet type 1 costs 1 coin, change if needed
+                    stats["coins_spent"] += 1
             return True
         except Exception as e:
             if not is_restarting:
@@ -229,11 +268,13 @@ def bot_manager_loop():
             # Check for cycle end
             if elapsed >= cycle_duration:
                 print(f"[MANAGER] Cycle finished ({cycle_duration}s). Pausing...")
+                log_stats()
                 break
                 
             # Check for errors
             if error_count >= max_errors:
                 print(f"[MANAGER] Max errors reached ({error_count}). Restarting...")
+                log_stats()
                 if config_data["owner_id"]:
                     track_and_send(config_data["owner_id"], f"🔧 *Auto Restart*\n⚠️ Error: {last_error_msg}\n🔄 Restarting now...")
                 break
@@ -241,6 +282,7 @@ def bot_manager_loop():
             # Check if shoot thread died unexpectedly
             if in_game and not shoot_alive and ws_conn and ws_conn.connected:
                 print("[MANAGER] Shoot thread died. Restarting...")
+                log_stats()
                 break
                 
             time.sleep(1)
@@ -341,7 +383,7 @@ def use_4x_loop(ws):
 # MESSAGE HANDLER
 # ==========================================
 def handle_message(data, ws):
-    global game_creds, login_handled, play_handled, fish_list, last_server_time, error_count, last_error_msg
+    global game_creds, login_handled, play_handled, fish_list, last_server_time, error_count, last_error_msg, stats
     try:
         decoded = msgpack.unpackb(data, raw=False)
         if not isinstance(decoded, dict): return
@@ -349,7 +391,6 @@ def handle_message(data, ws):
         msg_id = decoded.get("msgId", -1)
         inner = decoded.get("data", decoded)
         if not isinstance(inner, dict): inner = {}
-        print(f"[WS] Received route: {route}, msgId: {msg_id}", flush=True)
         
         if route == "OnUpdateObjects":
             objects = inner.get("objects", [])
@@ -369,12 +410,25 @@ def handle_message(data, ws):
             f_id = inner.get("id")
             with fish_lock:
                 if f_id in fish_list: del fish_list[f_id]
+            # Track kills and gains
+            if inner.get("playerId") == game_creds.get("username"):
+                with stats_lock:
+                    stats["fish_killed"] += 1
+                    stats["coins_gained"] += inner.get("cash", 0)
+
+        elif route == "OnUpdateCash":
+            if inner.get("playerId") == game_creds.get("username"):
+                with stats_lock:
+                    stats["current_balance"] = inner.get("cash", 0)
 
         if msg_id == 1: # Login
             if inner.get("ok"):
                 login_handled = True
                 game_creds["username"] = inner.get("username", "")
                 game_creds["password"] = inner.get("password", "")
+                with stats_lock:
+                    stats["start_balance"] = inner.get("cash", 0)
+                    stats["current_balance"] = inner.get("cash", 0)
                 if config_data["owner_id"]:
                     clean_and_send_menu(config_data["owner_id"], f"✅ *Login OK!*\n👤 {inner.get('nickname', 'User')}\n💰 Balance: {inner.get('cash', 0):,}\n\n⚡ Entering room...")
                 if not heartbeat_alive: threading.Thread(target=heartbeat_loop, args=(ws,), daemon=True).start()
@@ -422,6 +476,7 @@ def handle_callback(call):
         elif not config_data.get("game_access_token"): bot.answer_callback_query(call.id, "❌ Set token first!")
         else:
             is_running = True
+            reset_session_stats()
             bot.answer_callback_query(call.id, "⚡ Starting...")
     elif cmd == "cmd_stop":
         is_running = False
@@ -437,7 +492,23 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        clean_and_send_menu(user_id, f"📊 *Bot Status*\nStatus: {status}\nShooting: {shoot}\nCycle: {cycle_duration}s run / {cycle_pause}s pause")
+        with stats_lock:
+            profit = stats["coins_gained"] - stats["coins_spent"]
+            stat_text = (
+                f"📊 *Bot Status*\n"
+                f"Status: {status}\n"
+                f"Shooting: {shoot}\n"
+                f"--------------------------\n"
+                f"📡 Requests: {stats['requests_sent']}\n"
+                f"💸 Spent: {stats['coins_spent']:,}\n"
+                f"💰 Gained: {stats['coins_gained']:,}\n"
+                f"📈 Profit: {profit:,}\n"
+                f"🐟 Kills: {stats['fish_killed']}\n"
+                f"🏦 Balance: {stats['current_balance']:,}\n"
+                f"--------------------------\n"
+                f"Cycle: {cycle_duration}s run / {cycle_pause}s pause"
+            )
+        clean_and_send_menu(user_id, stat_text)
         bot.answer_callback_query(call.id)
 
 def handle_token_input(message):
