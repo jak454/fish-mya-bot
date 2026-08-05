@@ -12,6 +12,9 @@ import math
 import sys
 from urllib.parse import urlparse, parse_qs
 
+# Force unbuffered output for GitHub Actions logs
+sys.stdout.reconfigure(line_buffering=True)
+
 # ==========================================
 # CONFIGURATION
 # ==========================================
@@ -26,7 +29,13 @@ WS_HEADERS = [
     "X-Requested-With: com.mytel.myid"
 ]
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+print(f"[DEBUG] Initializing Telegram Bot with token: {TELEGRAM_BOT_TOKEN[:10]}...", flush=True)
+try:
+    bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+    print("[DEBUG] Telegram Bot object created.", flush=True)
+except Exception as e:
+    print(f"[CRITICAL] Failed to initialize Telegram Bot: {e}", flush=True)
+    sys.exit(1)
 
 # ==========================================
 # STATE
@@ -57,7 +66,7 @@ cycle_pause = 5
 
 # ==========================================
 # ERROR MONITORING
-# ==========================================
+# ===========================================
 error_count = 0
 max_errors = 1 # Restart immediately on any error
 last_error_msg = "None"
@@ -427,7 +436,7 @@ def handle_callback(call):
     elif cmd == "cmd_status":
         status = "🟢 Running" if is_running else "🔴 Stopped"
         shoot = "🔥 Active" if shoot_alive else "💤 Idle"
-        clean_and_send_menu(user_id, f"📊 *Bot Status*\nStatus: {status}\nShooting: {shoot}\nCycle: 30s run / 5s pause")
+        clean_and_send_menu(user_id, f"📊 *Bot Status*\nStatus: {status}\nShooting: {shoot}\nCycle: {cycle_duration}s run / {cycle_pause}s pause")
         bot.answer_callback_query(call.id)
 
 def handle_token_input(message):
@@ -442,6 +451,18 @@ def handle_token_input(message):
     clean_and_send_menu(user_id, "✅ Token updated!")
 
 if __name__ == "__main__":
+    print("[STARTUP] Starting Bot Manager Thread...", flush=True)
     threading.Thread(target=bot_manager_loop, daemon=True).start()
-    if config_data.get("game_access_token"): is_running = True
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    
+    if config_data.get("game_access_token"):
+        print("[STARTUP] Found access token, setting is_running = True", flush=True)
+        is_running = True
+    else:
+        print("[STARTUP] No access token found. Bot will wait for command.", flush=True)
+        
+    print("[STARTUP] Starting Telegram Polling...", flush=True)
+    try:
+        bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    except Exception as e:
+        print(f"[CRITICAL] Telegram Polling crashed: {e}", flush=True)
+        sys.exit(1)
