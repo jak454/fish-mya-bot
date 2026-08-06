@@ -358,13 +358,13 @@ def auto_shoot_loop(ws):
             angle_rad = math.radians(random.randint(-45, 45))
             send_ws(ws, {
                 "route": "shoot",
-                "data": {"rad": angle_rad, "type": 6, "target": target_ids[0] if target_ids else -1, "rapidFire": True, "auto": True, "bulletSpeed": bullet_speed},
+                "data": {"rad": angle_rad, "type": 4, "target": target_ids[0] if target_ids else -1, "rapidFire": True, "auto": True, "bulletSpeed": bullet_speed},
                 "msgId": 0
             })
             if target_ids:
                 send_ws(ws, {
                     "route": "clientHitFish",
-                    "data": {"btype": 6, "skillType": 0, "fIds": target_ids, "bulletSpeed": bullet_speed},
+                    "data": {"btype": 4, "skillType": 0, "fIds": target_ids, "bulletSpeed": bullet_speed},
                     "msgId": 0
                 })
         except: break
@@ -375,7 +375,7 @@ def use_4x_loop(ws):
     global use_4x_alive
     use_4x_alive = True
     while is_running and use_4x_alive and ws.connected and not is_restarting:
-        send_ws(ws, {"route": "useItem", "data": {"type": 6}, "msgId": 0})
+        send_ws(ws, {"route": "useItem", "data": {"type": 4}, "msgId": 0})
         time.sleep(8)
     use_4x_alive = False
 
@@ -447,7 +447,7 @@ def start_game_actions(ws):
     global in_game
     if not is_running or is_restarting: return
     in_game = True
-    send_ws(ws, {"route": "clientActiveGun", "data": {"btype": 6, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed}, "msgId": 0})
+    send_ws(ws, {"route": "clientActiveGun", "data": {"btype": 4, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed}, "msgId": 0})
     if not shoot_alive: threading.Thread(target=auto_shoot_loop, args=(ws,), daemon=True).start()
     if not use_4x_alive: threading.Thread(target=use_4x_loop, args=(ws,), daemon=True).start()
 
