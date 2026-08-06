@@ -155,7 +155,7 @@ def send_ws(ws, payload_dict):
                 # Track coin spending on shoot
                 if payload_dict.get("route") == "shoot":
                     # Assume bullet type 1 costs 1 coin, change if needed
-                    stats["coins_spent"] += 1
+                    stats["coins_spent"] += 6
             return True
         except Exception as e:
             if not is_restarting:
@@ -358,13 +358,13 @@ def auto_shoot_loop(ws):
             angle_rad = math.radians(random.randint(-45, 45))
             send_ws(ws, {
                 "route": "shoot",
-                "data": {"rad": angle_rad, "type": 1, "target": target_ids[0] if target_ids else -1, "rapidFire": True, "auto": True, "bulletSpeed": bullet_speed},
+                "data": {"rad": angle_rad, "type": 6, "target": target_ids[0] if target_ids else -1, "rapidFire": True, "auto": True, "bulletSpeed": bullet_speed},
                 "msgId": 0
             })
             if target_ids:
                 send_ws(ws, {
                     "route": "clientHitFish",
-                    "data": {"btype": 1, "skillType": 0, "fIds": target_ids, "bulletSpeed": bullet_speed},
+                    "data": {"btype": 6, "skillType": 0, "fIds": target_ids, "bulletSpeed": bullet_speed},
                     "msgId": 0
                 })
         except: break
@@ -447,7 +447,7 @@ def start_game_actions(ws):
     global in_game
     if not is_running or is_restarting: return
     in_game = True
-    send_ws(ws, {"route": "clientActiveGun", "data": {"btype": 1, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed}, "msgId": 0})
+    send_ws(ws, {"route": "clientActiveGun", "data": {"btype": 6, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed}, "msgId": 0})
     if not shoot_alive: threading.Thread(target=auto_shoot_loop, args=(ws,), daemon=True).start()
     if not use_4x_alive: threading.Thread(target=use_4x_loop, args=(ws,), daemon=True).start()
 
