@@ -1,35 +1,103 @@
 name: Run Fish Bot
 
+
+
+concurrency:
+
+  group: run-fish-bot
+  
+  cancel-in-progress: true
+  
+
+
 on:
+
   workflow_dispatch:
+  
   schedule:
+  
     - cron: '0 */6 * * *' # Run every 6 hours
+    
+
 
 jobs:
+
   run-bot:
+  
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 hours max
+    
+    timeout-minutes: 60 # 60 minutes max
+    
     steps:
+    
       - name: Checkout code
+      
         uses: actions/checkout@v4
+        
+
 
       - name: Set up Python
+      
         uses: actions/setup-python@v5
+        
         with:
+        
           python-version: '3.10'
+          
+
 
       - name: Install dependencies
+      
         run: |
+        
           python -m pip install --upgrade pip
+          
           pip install -r requirements.txt
+          
+
 
       - name: Run Bot
+      
         env:
+        
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          
           GAME_ACCESS_TOKEN: ${{ secrets.GAME_ACCESS_TOKEN }}
+          
         run: python bot.py
+        
         continue-on-error: true
+        
+
 
       - name: Notify on Failure
+      
         if: failure()
+        
         run: echo "Workflow failed - check logs for details"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
