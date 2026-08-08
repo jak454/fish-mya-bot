@@ -374,9 +374,11 @@ def auto_shoot_loop(ws):
 def use_4x_loop(ws):
     global use_4x_alive
     use_4x_alive = True
+    print("[GAME] 4x Fast Shoot Loop started (Every 5s).")
     while is_running and use_4x_alive and ws.connected and not is_restarting:
-        send_ws(ws, {"route": "useItem", "data": {"type": 4}, "msgId": 0})
-        time.sleep(8)
+        # [FIXED] type: 6 is FastShootX4, sending every 5 seconds
+        send_ws(ws, {"route": "useItem", "data": {"type": 6}, "msgId": 0})
+        time.sleep(5)
     use_4x_alive = False
 
 # ==========================================
@@ -447,6 +449,11 @@ def start_game_actions(ws):
     global in_game
     if not is_running or is_restarting: return
     in_game = True
+    
+    # [MODIFIED] AUTO 1 click (type 4 = AUTO)
+    print("[GAME] Activating AUTO once...")
+    send_ws(ws, {"route": "useItem", "data": {"type": 4}, "msgId": 0})
+    
     send_ws(ws, {"route": "clientActiveGun", "data": {"btype": 4, "gun": "gun1", "skillType": "none", "locationX": 0, "locationY": 0, "bulletSpeed": bullet_speed}, "msgId": 0})
     if not shoot_alive: threading.Thread(target=auto_shoot_loop, args=(ws,), daemon=True).start()
     if not use_4x_alive: threading.Thread(target=use_4x_loop, args=(ws,), daemon=True).start()
